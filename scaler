@@ -1,0 +1,171 @@
+#!/bin/bash
+# "U can('t) touch this" -- MC Hammer
+# Contact: emu (<- join ->) gel (at) qq.com is the email
+#
+progName="$( basename "$0" )"
+version=0.3
+precision=2
+
+warn() { local fmt="$1"; shift; printf "$progName: $fmt\n" "$@" >&2; }
+die () { local st="$?"; warn "$@"; exit "$st"; } 
+define(){ IFS='\n' read -r -d '' ${1} || true; }
+
+define helpString <<EOF
+$progName v$version - Scale conversion (map units <-> physical units)
+Public domain, 2016 GrepSuzette (A'vtW)
+Syntax: $progName [OPTIONS] [MEASURE1 MEASURE2]
+
+OPTIONS:
+ --help -h        Show help
+ --version -v     Show version and exit
+ --precision=INT  Set number of digits after the decimal point (default=$precision)
+ -p=INT           Same as --precision
+
+MEASURE:
+    [number]UNIT  E.g. mm or 43mm
+
+Examples:
+    $progName 43mm 187cm
+    $progName m yard
+    $progName m yard --precision=3
+    $progName m yard -p3
+
+    The first example uses a scale of 43:1870.
+    The second example reads the ration from GNU units ('units') if installed.
+EOF
+
+params=()
+
+for i in "$@"; do
+    case $i in
+        --help | -h ) shift; echo "$helpString"; exit 0 ;;
+        --version | -v ) shift; echo "$version"; exit 0 ;;
+        --precision* | -p* ) 
+            if [[ "$1" =~ ^(--precision|-p)=?(.*) ]]; then
+                precision=${BASH_REMATCH[2]}
+            fi
+            ;;
+        -* ) echo "Unknown option: $1"; exit 1 ;;
+        *) params+=($i) ;;
+    esac
+done
+
+if [[ ! $precision =~ ^[0-9]+$ || $precision -lt 0 ]]; then
+    die "Parameter for --precision must be a positive integer. '$precision' was given."
+fi
+
+# echo "Note: this is a 2 way converter between e.g. a map and the actual distance."
+# echo "      The 2 units will need to be different. You can use e.g. mm and cm,"
+# echo "      even 'a', 'b' if those units are fictional."
+# echo
+
+if [[ ${#params[@]} -gt 1 ]]; then
+    measured=${params[0]}
+    real=${params[1]}
+else 
+    until [[ $measured =~ ^[0-9]+\s*[^0-9]+$ ]]; do
+        read -p "(Definition 1/2) Enter measured distance on the map (e.g. '33mm')> " measured
+    done
+
+    until [[ $real =~ ^[0-9]+\s*[^0-9]+$ ]]; do
+        read -p "(Definition 2/2) Enter distance corresponding to the previous in reality (e.g. '104cm')> " real
+    done
+fi
+
+if [[ $measured =~ ^([0-9]+)\s*([^0-9]+)$ ]]; then
+    measured_units="${BASH_REMATCH[2]}"
+    measured_number="${BASH_REMATCH[1]}"
+else
+    errMeasuredIsNotNumeric=1
+fi
+
+if [[ $real =~ ^([0-9]+\.?[0-9]*)\s*([^0-9]+)$ ]]; then
+    real_units="${BASH_REMATCH[2]}"
+    real_number="${BASH_REMATCH[1]}"
+else 
+    if [[ -z errMeasuredIsNotNumeric ]]; then 
+        die "Incorrect format: either both entries need to be like '44mm 10km'
+        or like 'yards m'. Mixing up as in '$measured $real' is not allowed."
+    elif [[ $real =~ ^[0-9]+\.?[0-9]*$ || $measured =~ ^[0-9]+\.?[0-9]*$ ]]; then
+        die "You provided just numbers. Use fictional units such as a and b explicitely, e.g.: $progName ${real}a ${measured}b"
+    else
+        # Test whether maybe they both are units defined in GNU units?
+        # First test if command units exists
+        if [ ! -x "$(command -v units)" ]; then
+            die "It seems GNU units is not installed."
+        fi
+        if units -S1 "$measured" "$real" >/dev/null; then
+            real_units="$real"
+            real_number=1
+            measured_units="$measured"
+            measured_number=$(units -S1 "$real" "$measured" | cut -d '*' -f2)
+            measured_number=${measured_number%% }
+            measured_number=${measured_number## }
+            errMeasuredIsNotNumeric=0
+        else
+            die "Incorrect format for real distance: $real"
+        fi
+    fi
+fi
+if [[ $errMeasuredIsNotNumeric == 1 ]]; then 
+    die "Incorrect format for measured distance: $measured_number"
+fi
+
+if [[ $measured_units == $real_units ]]; then die "the two units need to be different (eg: 1mm 1cm or 1a 1b). Quitting."; fi
+
+echo
+echo "Scale is $measured_number$measured_units:$real_number$real_units"
+echo "Default unit set to $real_units, type $measured_units to change to that default unit."
+echo "Now looping through measures ('exit' or Ctrl-C to exit)..."
+echo 
+
+last_units="$real_units"
+
+while [[ 1 ]]; do
+    read -p "$last_units> " 
+    if [[ $REPLY =~ ^([0-9]+\.?[0-9]*)\s*([^0-9]+)$ ]]; then
+        reply_units="${BASH_REMATCH[2]}"
+        reply_number="${BASH_REMATCH[1]}"
+
+        case "$reply_units" in
+            $real_units) 
+                t=$(echo "scale=$precision; $reply_number * $measured_number / $real_number" | bc -l )
+                echo " --> ${t}$measured_units"
+                ;;
+            $measured_units)
+                t=$(echo "scale=$precision; $reply_number * $real_number / $measured_number" | bc -l )
+                echo " --> ${t}$real_units"
+                ;;
+            *)
+                echo "error: '$reply_units' is a wrong unit. Use either $real_units or $measured_units";;
+        esac
+    elif [[ $REPLY =~ ^([^0-9]+\.?[0-9]*)$ ]]; then
+        # Not beginning with a number but non-empty.
+        # Means text changing units or possibly 'exit' or erroneous.
+        # .make sure unit is either $real_units or $measured_units
+        t="${BASH_REMATCH[1]}"
+        if [[ "$t" == "exit" ]]; then
+            exit 0
+        elif [[ "$t" == "$real_units" || "$t" == "$measured_units" ]]; then
+            last_units="$t"
+        else
+            echo "error: invalid unit"
+        fi
+    elif [[ $REPLY =~ ^([0-9]+\.?[0-9]*)$ ]]; then
+        reply_number=${BASH_REMATCH[1]}
+        case "$last_units" in
+            $real_units)
+                # echo "$reply_number * $measured_number / $real_number" 
+                t=$(echo "scale=$precision; $reply_number * $measured_number / $real_number" | bc -l )
+                echo " --> ${t}$measured_units"
+                ;;
+            $measured_units)
+                t=$(echo "scale=$precision; $reply_number * $real_number / $measured_number" | bc -l )
+                echo " --> ${t}$real_units"
+                ;;
+        esac
+    else 
+        echo "error: incorrect format (try something such as 10$real_units or 174$measured_units)"
+    fi
+done
+
