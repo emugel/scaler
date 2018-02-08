@@ -1,5 +1,8 @@
 # scaler
+
 **Scaler** is a simple bash interpretor useful when working on **scale conversions**. A calculator makes those simple calculations very teddious, not with scaler.
+
+It requires `bc` to work.
 
 ## Example 1: work between a map and a real distance
 
